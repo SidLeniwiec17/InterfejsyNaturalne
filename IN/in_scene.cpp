@@ -4,14 +4,15 @@
 #include "mini_exceptions.h"
 #include <sstream>
 #include <Windowsx.h>
+#include "dinput.h"
 
 using namespace std;
 using namespace mini;
 using namespace mini::utils;
 using namespace DirectX;
 bool leftClicked = false;
-int oldX;
-int oldY;
+int oldX = -1;
+int oldY = -1;
 bool wd = false;
 bool sd = false;
 bool ad = false;
@@ -20,11 +21,18 @@ bool ed = false;
 bool opened = false;
 bool closed = true;
 
+IDirectInput8* di;
+IDirectInputDevice8* pMouse;
+IDirectInputDevice8* pKeyboard;
+
+const unsigned int GET_STATE_RETRIES = 2;
+const unsigned int ACQUIRE_RETRIES = 2;
+
 bool INScene::ProcessMessage(WindowMessage& msg)
 {
 	/*Process windows messages here*/
 	/*if message was processed, return true and set value to msg.result*/
-	
+	/*
 	switch(msg.message)
 	{
 	case WM_LBUTTONDOWN:
@@ -87,7 +95,7 @@ bool INScene::ProcessMessage(WindowMessage& msg)
 		 if(msg.wParam == 0x45)
 			ed = false;
 		break;
-	}
+	}*/
 
 	return false;
 }
@@ -95,12 +103,41 @@ bool INScene::ProcessMessage(WindowMessage& msg)
 void INScene::InitializeInput()
 {
 	/*Initialize Direct Input resources here*/
+	
 
+	HRESULT result = DirectInput8Create(getHandle(),
+		DIRECTINPUT_VERSION, IID_IDirectInput8,
+		reinterpret_cast<void**>(&di), nullptr);
+
+	
+	result = di->CreateDevice(GUID_SysMouse, &pMouse,
+		nullptr);
+
+	
+	result = di->CreateDevice(GUID_SysKeyboard, &pKeyboard,
+		nullptr);
+
+	result = pMouse->SetDataFormat(&c_dfDIMouse);
+	result = pKeyboard->SetDataFormat(&c_dfDIKeyboard);
+
+	result = pMouse->SetCooperativeLevel(
+		m_window.getHandle(),
+		DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);	result = pKeyboard->SetCooperativeLevel(
+		m_window.getHandle(),
+		DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);
+
+	result = pMouse->Acquire();
+	result = pKeyboard->Acquire();
 }
 
 void INScene::Shutdown()
 {
 	/*Release Direct Input resources here*/
+	
+	pMouse->Unacquire();
+	pMouse->Release();
+	pKeyboard->Unacquire();
+	pKeyboard->Release();	di->Release();
 
 	m_font.reset();
 	m_fontFactory.reset();
@@ -113,6 +150,35 @@ void INScene::Shutdown()
 	DxApplication::Shutdown();
 }
 
+bool GetDeviceState(IDirectInputDevice8* pDevice, unsigned int size, void* ptr)
+{
+	if (!pDevice)
+		return false;
+	for (int i = 0; i < GET_STATE_RETRIES; ++i)
+	{
+		HRESULT result = pDevice->GetDeviceState(size, ptr);
+		if (SUCCEEDED(result))
+			return true;
+		if (result != DIERR_INPUTLOST &&
+			result != DIERR_NOTACQUIRED)
+		{
+			//YOLO1
+		}
+		for (int j = 0; j < ACQUIRE_RETRIES; ++j)
+		{
+			result = pDevice->Acquire();
+			if (SUCCEEDED(result))
+				break;
+			if (result != DIERR_INPUTLOST &&
+				result != E_ACCESSDENIED)
+			{
+				//yolo2
+			}
+		}
+	}
+	return false;
+}
+
 
 void INScene::Update(float dt)
 {
@@ -120,6 +186,52 @@ void INScene::Update(float dt)
 	
 	/*remove the following line to stop the initial camera animation*/
 	//m_camera.Rotate(0.0f, dt*XM_PIDIV4);
+	leftClicked = false;
+	wd = false;
+	sd = false;
+	ad = false;
+	dd = false;
+	ed = false;
+
+	DIMOUSESTATE state;
+	if (GetDeviceState(pMouse, sizeof(DIMOUSESTATE), &state))
+	{
+		if (state.rgbButtons[0])
+		{
+			if (leftClicked == false)
+				leftClicked = true;
+		}
+
+		if (leftClicked == true)
+		{
+			if (oldX == -1)
+				oldX = state.lX;
+			if (oldY == -1)
+				oldY = state.lY;
+
+			if (state.lX != oldX || state.lY != oldY)
+			{
+				m_camera.Rotate((oldY + state.lY) * 0.002, (oldX + state.lX) * 0.002);
+				oldX = state.lX;
+				oldY = state.lY;
+			}
+		}
+	}	BYTE states[256];
+	if (GetDeviceState(pKeyboard, sizeof(BYTE) * 256, states))
+	{
+		if (states[DIK_W])
+			wd = true;
+		if (states[DIK_S])
+			sd = true; 
+		if (states[DIK_A])
+			ad = true;
+		if (states[DIK_D])
+			dd = true;
+		if (states[DIK_E])
+			ed = true;		
+	}
+
+
 	if(wd == true)
 		MoveCharacter(0,1 * dt);
 	
@@ -152,7 +264,7 @@ void INScene::Update(float dt)
 			
 		}
 	}
-	
+
 	m_counter.NextFrame(dt);
 	UpdateDoor(dt);
 }
